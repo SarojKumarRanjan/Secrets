@@ -1,27 +1,54 @@
-//jshint esversion:6
+// jshint esversion:6
 require("dotenv").config();
 const express = require("express");
 const bodyparser = require("body-parser");
 const ejs = require("ejs");
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
-const saltRound = 10;
+const session = require("express-session");
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 
 const app = express();
 app.use(express.static("public"));
 app.set("view engine", "ejs");
 app.use(bodyparser.urlencoded({ extended: true }));
 
-mongoose.connect("mongodb://127.0.0.1:27017/userDB", { useNewUrlParser: true });
+app.use(
+  session({
+    secret: "this is our little secret",
+    resave: false,
+    saveUninitialized: false,
+  })
+);
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+mongoose
+  .connect("mongodb://127.0.0.1:27017/userDB", {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => {
+    console.log("MongoDB connected successfully");
+  })
+  .catch((err) => {
+    console.error("MongoDB connection error:", err);
+  });
 
 const userSchema = new mongoose.Schema({
   email: String,
   password: String,
 });
 
-// secret key
+userSchema.plugin(passportLocalMongoose);
 
 const User = new mongoose.model("User", userSchema);
+
+passport.use(User.createStrategy());
+
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 app.get("/", function (req, res) {
   res.render("home");
@@ -35,57 +62,57 @@ app.get("/register", function (req, res) {
   res.render("register");
 });
 
+app.get("/secrets", function (req, res) {
+  if (req.isAuthenticated()) {
+    res.render("secrets");
+  } else {
+    res.render("login");
+  }
+});
+
+app.get("/logout", function (req, res) {
+  req.logout(function (err) {
+    if (err) {
+      console.error("Logout error:", err);
+    }
+    res.redirect("/");
+  });
+});
+
+
+
 app.post("/register", function (req, res) {
-  bcrypt
-    .hash(req.body.password, saltRound)
-
-    .then((hash) => {
-      const newUser = new User({
-        email: req.body.username,
-        password: hash,
+  User.register({ username: req.body.username }, req.body.password)
+    .then((user) => {
+      passport.authenticate("local")(req, res, function () {
+        res.redirect("/secrets");
       });
-
-      newUser.save();
-      res.render("secrets");
     })
-
     .catch((err) => {
-      console.error("Error:", err);
+      console.error("Registration error:", err);
+      res.redirect("/register");
     });
 });
 
 app.post("/login", function (req, res) {
-  const username = req.body.username;
-  const password = req.body.password;
+  const user = new User({
+    username: req.body.username,
+    password: req.body.password,
+  });
 
-  User.findOne({ email: username })
-    .then((foundUser) => {
-      if (foundUser) {
-        bcrypt
-          .compare(password, foundUser.password)
-          .then((isMatch) => {
-            if (isMatch) {
-              res.render("secrets");
-            } else {
-              // Password doesn't match
-              res.render("login"); // You can render the login page again or redirect as needed
-            }
-          })
-          .catch((err) => {
-            console.error("Error comparing passwords:", err);
-            res.render("login"); // Handle the error by rendering the login page again
-          });
-      } else {
-        // User not found
-        res.render("login"); // You can render the login page again or redirect as needed
-      }
-    })
-    .catch((err) => {
-      console.error("Error finding user:", err);
-      res.render("login"); // Handle the error by rendering the login page again
-    });
+  req.login(user, function (err) {
+    if (err) {
+      console.error("Login error:", err);
+      res.redirect("/login");
+    } else {
+      passport.authenticate("local")(req, res, function () {
+        res.redirect("/secrets");
+      });
+    }
+  });
 });
 
+
 app.listen(3000, function () {
-  console.log("server started");
+  console.log("Server started");
 });
